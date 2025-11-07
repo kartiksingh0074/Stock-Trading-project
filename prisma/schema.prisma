@@ -1,0 +1,136 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// Better Auth User table (matches better-auth expected schema)
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified Boolean   @default(false) @map("email_verified")
+  image         String?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  country       String?
+  cashBalance   Decimal   @default(10000.00) @db.Decimal(12, 2) @map("cash_balance")
+  
+  // Relations
+  session       Session[]
+  account       Account[]
+  watchlist     WatchlistItem[]
+  transactions  Transaction[]
+  portfolio     PortfolioHolding[]
+  
+  @@map("user")
+}
+
+// Better Auth Session table
+model Session {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  expiresAt    DateTime @map("expires_at")
+  token        String   @unique
+  ipAddress    String?  @map("ip_address")
+  userAgent    String?  @map("user_agent")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([token])
+  @@map("session")
+}
+
+// Better Auth Account table (for OAuth providers if needed)
+model Account {
+  id                String   @id @default(cuid())
+  userId            String   @map("user_id")
+  accountId         String   @map("account_id")
+  providerId        String   @map("provider_id")
+  accessToken       String?  @map("access_token")
+  refreshToken      String?  @map("refresh_token")
+  expiresAt         DateTime? @map("expires_at")
+  password          String?
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+  
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("account")
+}
+
+// Better Auth Verification table
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime @map("expires_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  
+  @@unique([identifier, value])
+  @@map("verification")
+}
+
+// Watchlist table
+model WatchlistItem {
+  id        String   @id @default(cuid())
+  userId    String
+  symbol    String
+  company   String
+  addedAt   DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, symbol])
+  @@index([userId])
+  @@index([symbol])
+}
+
+// Transaction table (buy/sell orders)
+model Transaction {
+  id            String      @id @default(cuid())
+  userId        String
+  symbol        String
+  company       String
+  type          String      // 'BUY' or 'SELL'
+  quantity      Int
+  price         Decimal     @db.Decimal(10, 2)
+  totalAmount   Decimal     @db.Decimal(12, 2) // quantity * price
+  executedAt    DateTime    @default(now())
+  
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([symbol])
+  @@index([executedAt])
+}
+
+// Portfolio holdings table (current holdings)
+model PortfolioHolding {
+  id              String    @id @default(cuid())
+  userId          String
+  symbol          String
+  company         String
+  quantity        Int
+  averageBuyPrice Decimal   @db.Decimal(10, 2)
+  totalCost       Decimal   @db.Decimal(12, 2) // quantity * averageBuyPrice
+  updatedAt       DateTime  @updatedAt
+  
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, symbol])
+  @@index([userId])
+  @@index([symbol])
+}

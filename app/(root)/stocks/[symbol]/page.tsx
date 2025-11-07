@@ -1,5 +1,9 @@
 import TradingViewWidget from "@/components/TradingViewWidget";
 import WatchlistButton from "@/components/WatchlistButton";
+import BuySellButtons from "@/components/BuySellButtons";
+import { auth } from "@/lib/better-auth/auth";
+import { headers } from "next/headers";
+import { getStockProfile } from "@/lib/actions/finnhub.actions";
 import {
   SYMBOL_INFO_WIDGET_CONFIG,
   CANDLE_CHART_WIDGET_CONFIG,
@@ -12,6 +16,13 @@ import {
 export default async function StockDetails({ params }: StockDetailsPageProps) {
   const { symbol } = await params;
   const scriptUrl = `https://s3.tradingview.com/external-embedding/embed-widget-`;
+  
+  const session = await auth.api.getSession({ headers: await headers() });
+  const user = session?.user;
+  
+  const normalizedSymbol = symbol.toUpperCase();
+  const stockProfile = await getStockProfile(normalizedSymbol);
+  const companyName = stockProfile?.name || normalizedSymbol;
 
   return (
     <div className="flex min-h-screen p-4 md:p-6 lg:p-8">
@@ -41,8 +52,22 @@ export default async function StockDetails({ params }: StockDetailsPageProps) {
 
         {/* Right column */}
         <div className="flex flex-col gap-6">
-          <div className="flex items-center justify-between">
-            <WatchlistButton symbol={symbol.toUpperCase()} company={symbol.toUpperCase()} isInWatchlist={false} />
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <WatchlistButton 
+                symbol={normalizedSymbol} 
+                company={companyName} 
+                isInWatchlist={false}
+                userId={user?.id}
+              />
+            </div>
+            {user && (
+              <BuySellButtons
+                userId={user.id}
+                symbol={normalizedSymbol}
+                company={companyName}
+              />
+            )}
           </div>
 
           <TradingViewWidget

@@ -1,22 +1,19 @@
 import { betterAuth } from "better-auth";
-import { mongodbAdapter} from "better-auth/adapters/mongodb";
-import { connectToDatabase} from "@/database/mongoose";
-import { nextCookies} from "better-auth/next-js";
+import { prismaAdapter } from "better-auth/adapters/prisma";
+import { prisma } from "@/lib/prisma";
+import { nextCookies } from "better-auth/next-js";
 
 let authInstance: ReturnType<typeof betterAuth> | null = null;
 
-export const getAuth = async () => {
+export const getAuth = () => {
     if(authInstance) return authInstance;
 
-    const mongoose = await connectToDatabase();
-    const db = mongoose.connection.db;
-
-    if(!db) throw new Error('MongoDB connection not found');
-
     authInstance = betterAuth({
-        database: mongodbAdapter(db as any),
-        secret: process.env.BETTER_AUTH_SECRET,
-        baseURL: process.env.BETTER_AUTH_URL,
+        database: prismaAdapter(prisma, {
+            provider: "mysql",
+        }),
+        secret: process.env.BETTER_AUTH_SECRET || "fallback-secret-key-min-32-characters-long",
+        baseURL: process.env.BETTER_AUTH_URL || "http://localhost:3000",
         emailAndPassword: {
             enabled: true,
             disableSignUp: false,
@@ -26,9 +23,10 @@ export const getAuth = async () => {
             autoSignIn: true,
         },
         plugins: [nextCookies()],
+        trustedOrigins: ["http://localhost:3000"],
     });
 
     return authInstance;
 }
 
-export const auth = await getAuth();
+export const auth = getAuth();
