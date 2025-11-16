@@ -65,19 +65,6 @@ export async function getPortfolioHolding(userId: string, symbol: string) {
   }
 }
 
-// Helper function to get current stock price (you can integrate with your Finnhub API)
-async function getCurrentStockPrice(symbol: string): Promise<number | null> {
-  try {
-    // TODO: Integrate with Finnhub API to get real-time prices
-    // For now, return null - the calling function can handle this
-    // You can use the existing finnhub.actions.ts to get quote data
-    return null;
-  } catch (err) {
-    console.error('getCurrentStockPrice error:', err);
-    return null;
-  }
-}
-
 export async function getPortfolioSummary(
   userId: string,
   currentPrices?: Record<string, number>
