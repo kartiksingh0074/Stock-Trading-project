@@ -36,14 +36,14 @@ const SignIn = () => {
     }
 
     return (
-        <>
-            <h1 className="form-title">Welcome back</h1>
+        <div className="w-full max-w-md mx-auto">
+            <h1 className="form-title text-center">Welcome back</h1>
 
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
                 <InputField
                     name="email"
                     label="Email"
-                    placeholder="contact@jsmastery.com"
+                    placeholder=""
                     register={register}
                     error={errors.email}
                     validation={{ required: 'Email is required', pattern: /^\w+@\w+\.\w+$/ }}
@@ -65,7 +65,7 @@ const SignIn = () => {
 
                 <FooterLink text="Don't have an account?" linkText="Create an account" href="/sign-up" />
             </form>
-        </>
+        </div>
     );
 };
 export default SignIn;

@@ -58,8 +58,6 @@ A full-stack stock trading simulator built with Next.js 15, MySQL, and Prisma. T
 
 ### APIs & Services
 - **Finnhub API** - Real-time stock data
-- **Inngest** (optional) - Background jobs
-- **Nodemailer** (optional) - Email notifications
 
 ## 📦 Installation
 
@@ -86,7 +84,7 @@ npm install
 Create a new MySQL database:
 
 ```sql
-CREATE DATABASE signalist_stock_tracker;
+CREATE DATABASE stock_db;
 ```
 
 ### 4. Configure Environment Variables
@@ -95,7 +93,7 @@ Create a `.env` file in the root directory:
 
 ```env
 # Database
-DATABASE_URL="mysql://username:password@localhost:3306/signalist_stock_tracker"
+DATABASE_URL="mysql://username:password@localhost:3306/stock_db"
 
 # Better Auth
 BETTER_AUTH_SECRET="your-secret-key-min-32-characters-long"
@@ -104,16 +102,6 @@ BETTER_AUTH_URL="http://localhost:3000"
 # Finnhub API (Get free key from https://finnhub.io/)
 FINNHUB_API_KEY="your_finnhub_api_key"
 NEXT_PUBLIC_FINNHUB_API_KEY="your_finnhub_api_key"
-
-# Optional: Inngest (for email notifications)
-INNGEST_EVENT_KEY=""
-INNGEST_SIGNING_KEY=""
-
-# Optional: Email
-EMAIL_HOST=""
-EMAIL_PORT=""
-EMAIL_USER=""
-EMAIL_PASSWORD=""
 ```
 
 **Generate BETTER_AUTH_SECRET:**
