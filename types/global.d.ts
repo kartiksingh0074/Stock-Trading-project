@@ -93,6 +93,15 @@ declare global {
         result: FinnhubSearchResult[];
     };
 
+    type FinnhubProfile2 = {
+        name?: string;
+        ticker?: string;
+        exchange?: string;
+        logo?: string;
+        marketCapitalization?: number;
+        pe?: number;
+    };
+
     type StockDetailsPageProps = {
         params: Promise<{
             symbol: string;
@@ -211,6 +220,7 @@ declare global {
         alertType: 'upper' | 'lower';
         threshold: number;
         changePercent?: number;
+        status?: 'ACTIVE' | 'TRIGGERED';
     };
 }
 

@@ -1,32 +1,28 @@
 'use server';
 
 import { prisma } from '@/lib/prisma';
+import { requireUserId } from '@/lib/auth/session';
+import { logError } from '@/lib/utils/logError';
 
-export async function getWatchlistSymbolsByEmail(email: string): Promise<string[]> {
-  if (!email) return [];
-
+export async function getWatchlistSymbols(): Promise<string[]> {
   try {
-    const user = await prisma.user.findUnique({
-      where: { email },
-      select: { id: true },
-    });
-
-    if (!user) return [];
+    const userId = await requireUserId();
 
     const items = await prisma.watchlistItem.findMany({
-      where: { userId: user.id },
+      where: { userId },
       select: { symbol: true },
     });
 
     return items.map((i) => String(i.symbol));
   } catch (err) {
-    console.error('getWatchlistSymbolsByEmail error:', err);
+    logError('watchlist.getWatchlistSymbols', err);
     return [];
   }
 }
 
-export async function getWatchlistByUserId(userId: string) {
+export async function getWatchlist() {
   try {
+    const userId = await requireUserId();
     const items = await prisma.watchlistItem.findMany({
       where: { userId },
       orderBy: { addedAt: 'desc' },
@@ -34,13 +30,14 @@ export async function getWatchlistByUserId(userId: string) {
 
     return items;
   } catch (err) {
-    console.error('getWatchlistByUserId error:', err);
+    logError('watchlist.getWatchlist', err);
     return [];
   }
 }
 
-export async function addToWatchlist(userId: string, symbol: string, company: string) {
+export async function addToWatchlist(symbol: string, company: string) {
   try {
+    const userId = await requireUserId();
     const normalizedSymbol = symbol.toUpperCase().trim();
     const normalizedCompany = company.trim();
 
@@ -63,13 +60,14 @@ export async function addToWatchlist(userId: string, symbol: string, company: st
 
     return { success: true, data: watchlistItem };
   } catch (err) {
-    console.error('addToWatchlist error:', err);
+    logError('watchlist.addToWatchlist', err, { symbol });
     return { success: false, error: 'Failed to add to watchlist' };
   }
 }
 
-export async function removeFromWatchlist(userId: string, symbol: string) {
+export async function removeFromWatchlist(symbol: string) {
   try {
+    const userId = await requireUserId();
     const normalizedSymbol = symbol.toUpperCase().trim();
 
     await prisma.watchlistItem.deleteMany({
@@ -81,13 +79,14 @@ export async function removeFromWatchlist(userId: string, symbol: string) {
 
     return { success: true };
   } catch (err) {
-    console.error('removeFromWatchlist error:', err);
+    logError('watchlist.removeFromWatchlist', err, { symbol });
     return { success: false, error: 'Failed to remove from watchlist' };
   }
 }
 
-export async function isInWatchlist(userId: string, symbol: string): Promise<boolean> {
+export async function isInWatchlist(symbol: string): Promise<boolean> {
   try {
+    const userId = await requireUserId();
     const normalizedSymbol = symbol.toUpperCase().trim();
 
     const item = await prisma.watchlistItem.findUnique({
@@ -101,7 +100,7 @@ export async function isInWatchlist(userId: string, symbol: string): Promise<boo
 
     return !!item;
   } catch (err) {
-    console.error('isInWatchlist error:', err);
+    logError('watchlist.isInWatchlist', err, { symbol });
     return false;
   }
 }

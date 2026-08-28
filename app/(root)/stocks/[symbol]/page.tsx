@@ -18,7 +18,7 @@ export default async function StockDetails({ params }: StockDetailsPageProps) {
   const scriptUrl = `https://s3.tradingview.com/external-embedding/embed-widget-`;
   
   const session = await auth.api.getSession({ headers: await headers() });
-  const user = session?.user;
+  const user = session?.user; 
   
   const normalizedSymbol = symbol.toUpperCase();
   const stockProfile = await getStockProfile(normalizedSymbol);

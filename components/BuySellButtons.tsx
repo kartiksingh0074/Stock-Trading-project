@@ -24,7 +24,7 @@ export default function BuySellButtons({ userId, symbol, company }: BuySellButto
   const fetchHolding = async () => {
     setLoading(true);
     try {
-      const holding = await getPortfolioHolding(userId, symbol);
+      const holding = await getPortfolioHolding(symbol);
       if (holding) {
         setCurrentHolding({
           quantity: holding.quantity,

@@ -33,7 +33,6 @@ export default function TransactionDialog({
   currentHolding,
 }: TransactionDialogProps) {
   const [quantity, setQuantity] = useState("");
-  const [price, setPrice] = useState("");
   const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [fetchingPrice, setFetchingPrice] = useState(false);
@@ -50,7 +49,6 @@ export default function TransactionDialog({
       const quote = await getStockQuote(symbol);
       if (quote) {
         setCurrentPrice(quote.price);
-        setPrice(quote.price.toFixed(2));
       }
     } catch (error) {
       console.error("Error fetching price:", error);
@@ -61,17 +59,11 @@ export default function TransactionDialog({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     const qty = parseInt(quantity);
-    const priceValue = parseFloat(price);
 
     if (!qty || qty <= 0) {
       toast.error("Please enter a valid quantity");
-      return;
-    }
-
-    if (!priceValue || priceValue <= 0) {
-      toast.error("Please enter a valid price");
       return;
     }
 
@@ -83,15 +75,16 @@ export default function TransactionDialog({
     setLoading(true);
 
     try {
+      // The price shown here is only an estimate for the confirmation total — the
+      // server always re-fetches the live market price and executes at that price.
       const result =
         type === "BUY"
-          ? await buyStock({ userId, symbol, company, quantity: qty, price: priceValue })
-          : await sellStock({ userId, symbol, company, quantity: qty, price: priceValue });
+          ? await buyStock({ symbol, company, quantity: qty })
+          : await sellStock({ symbol, company, quantity: qty });
 
       if (result.success) {
         toast.success(`Successfully ${type === "BUY" ? "bought" : "sold"} ${qty} shares of ${symbol}`);
         setQuantity("");
-        setPrice("");
         onOpenChange(false);
         // Refresh the page or update parent component
         window.location.reload();
@@ -106,7 +99,8 @@ export default function TransactionDialog({
     }
   };
 
-  const totalAmount = quantity && price ? (parseFloat(quantity) * parseFloat(price)).toFixed(2) : "0.00";
+  const totalAmount =
+    quantity && currentPrice ? (parseFloat(quantity) * currentPrice).toFixed(2) : "0.00";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -143,39 +137,31 @@ export default function TransactionDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="price">Price per Share</Label>
-            <div className="flex gap-2">
-              <Input
-                id="price"
-                type="number"
-                step="0.01"
-                min="0.01"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                placeholder="Enter price"
-                required
-                disabled={loading || fetchingPrice}
-              />
+            <Label>Price per Share</Label>
+            <div className="flex items-center gap-2">
               {fetchingPrice ? (
-                <Button type="button" variant="outline" disabled>
+                <span className="flex items-center gap-2 text-sm text-gray-400">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                </Button>
+                  Fetching current price...
+                </span>
               ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={fetchCurrentPrice}
-                  disabled={loading}
-                >
-                  Use Current
-                </Button>
+                <span className="text-lg font-semibold">
+                  {currentPrice ? `$${currentPrice.toFixed(2)}` : "Unavailable"}
+                </span>
               )}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={fetchCurrentPrice}
+                disabled={loading || fetchingPrice}
+              >
+                Refresh
+              </Button>
             </div>
-            {currentPrice && (
-              <p className="text-xs text-gray-500">
-                Current: ${currentPrice.toFixed(2)}
-              </p>
-            )}
+            <p className="text-xs text-gray-500">
+              Orders execute at the live market price at the moment they&apos;re placed.
+            </p>
           </div>
 
           <div className="p-3 bg-gray-800 rounded-md">
@@ -194,7 +180,7 @@ export default function TransactionDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={loading || fetchingPrice}>
+            <Button type="submit" disabled={loading || fetchingPrice || !currentPrice}>
               {loading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

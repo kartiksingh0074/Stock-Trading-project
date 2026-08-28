@@ -1,3 +1,4 @@
+import Link from "next/link";
 import TradingViewWidget from "@/components/TradingViewWidget";
 import {
     HEATMAP_WIDGET_CONFIG,
@@ -9,6 +10,12 @@ const Home = () => {
 
     return (
         <div className="flex min-h-screen home-wrapper">
+          <p className="text-gray-500">
+              Looking for today&apos;s movers?{" "}
+              <Link href="/markets" className="text-yellow-500 hover:underline">
+                  Check Markets
+              </Link>
+          </p>
           <section className="grid w-full gap-8 home-section">
               <div className="md:col-span-1 xl:col-span-1">
                   <TradingViewWidget

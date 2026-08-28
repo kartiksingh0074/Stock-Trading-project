@@ -1,233 +1,269 @@
 'use server';
 
 import { prisma } from '@/lib/prisma';
+import { Prisma } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
+import { requireUserId } from '@/lib/auth/session';
+import { getStockQuote } from '@/lib/actions/finnhub.actions';
+import { withSerializableRetry } from '@/lib/db/withRetry';
+import { logError } from '@/lib/utils/logError';
+import { recordSnapshotTx } from '@/lib/actions/snapshot.actions';
+
+const MAX_ORDER_QUANTITY = 1_000_000;
+const MAX_ORDER_PRICE = new Decimal('1000000');
 
 export interface BuyStockParams {
-  userId: string;
   symbol: string;
   company: string;
   quantity: number;
-  price: number;
+  // Informational only — the client's last-seen quote, shown for the confirmation total.
+  // The server always re-fetches the live price and uses that for the actual charge.
+  price?: number;
 }
 
 export interface SellStockParams {
-  userId: string;
   symbol: string;
   company: string;
   quantity: number;
-  price: number;
+  price?: number;
 }
 
-export async function buyStock({ userId, symbol, company, quantity, price }: BuyStockParams) {
+// Fetches the current market price server-side so a tampered/stale client-submitted
+// price can never be used to settle a trade.
+async function resolveAuthoritativePrice(symbol: string): Promise<Decimal> {
+  const quote = await getStockQuote(symbol);
+  if (!quote || !Number.isFinite(quote.price) || quote.price <= 0) {
+    throw new Error('Unable to fetch the current market price. Please try again.');
+  }
+  const unitPrice = new Decimal(quote.price.toFixed(2));
+  if (unitPrice.gt(MAX_ORDER_PRICE)) {
+    throw new Error('Order details are invalid');
+  }
+  return unitPrice;
+}
+
+// Core logic, independent of the Next.js request context — directly testable
+// (e.g. by scripts/test-concurrent-trading.mjs) and reused by the 'use server' wrapper below.
+export async function buyStockForUser(userId: string, { symbol, company, quantity }: BuyStockParams) {
   try {
-    if (quantity <= 0 || price <= 0) {
-      return { success: false, error: 'Quantity and price must be greater than 0' };
+    if (!Number.isSafeInteger(quantity) || quantity <= 0 || quantity > MAX_ORDER_QUANTITY) {
+      return { success: false, error: 'Quantity is invalid' };
     }
 
     const normalizedSymbol = symbol.toUpperCase().trim();
     const normalizedCompany = company.trim();
-    const totalAmount = new Decimal(quantity * price);
+    if (!normalizedSymbol || !normalizedCompany) {
+      return { success: false, error: 'Order details are invalid' };
+    }
 
-    // Use a transaction to ensure data consistency
-    const result = await prisma.$transaction(async (tx) => {
-      // Check user's cash balance
-      const user = await tx.user.findUnique({
-        where: { id: userId },
-        select: { cashBalance: true },
-      });
+    const unitPrice = await resolveAuthoritativePrice(normalizedSymbol);
+    const totalAmount = unitPrice.mul(quantity);
 
-      if (!user) {
-        throw new Error('User not found');
-      }
+    const result = await withSerializableRetry(() =>
+      prisma.$transaction(async (tx) => {
+        const user = await tx.user.findUnique({
+          where: { id: userId },
+          select: { cashBalance: true },
+        });
 
-      const currentBalance = user.cashBalance.toNumber();
-      const totalCost = totalAmount.toNumber();
+        if (!user) {
+          throw new Error('User not found');
+        }
 
-      if (currentBalance < totalCost) {
-        throw new Error(`Insufficient funds. You have $${currentBalance.toFixed(2)} but need $${totalCost.toFixed(2)}`);
-      }
+        if (user.cashBalance.lt(totalAmount)) {
+          throw new Error(`Insufficient funds. You have $${user.cashBalance.toFixed(2)} but need $${totalAmount.toFixed(2)}`);
+        }
 
-      // Deduct cash from user's balance
-      await tx.user.update({
-        where: { id: userId },
-        data: {
-          cashBalance: new Decimal(currentBalance - totalCost),
-        },
-      });
+        const updatedUser = await tx.user.update({
+          where: { id: userId },
+          data: {
+            cashBalance: { decrement: totalAmount },
+          },
+        });
 
-      // Create the transaction record
-      const transaction = await tx.transaction.create({
-        data: {
-          userId,
-          symbol: normalizedSymbol,
-          company: normalizedCompany,
-          type: 'BUY',
-          quantity,
-          price: new Decimal(price),
-          totalAmount,
-        },
-      });
-
-      // Update or create portfolio holding
-      const existingHolding = await tx.portfolioHolding.findUnique({
-        where: {
-          userId_symbol: {
+        const transaction = await tx.transaction.create({
+          data: {
             userId,
             symbol: normalizedSymbol,
+            company: normalizedCompany,
+            type: 'BUY',
+            quantity,
+            price: unitPrice,
+            totalAmount,
           },
-        },
-      });
+        });
 
-      if (existingHolding) {
-        // Calculate new average buy price: (oldTotalCost + newTotalCost) / (oldQuantity + newQuantity)
-        const oldTotalCost = existingHolding.totalCost.toNumber();
-        const newTotalCost = totalAmount.toNumber();
-        const newQuantity = existingHolding.quantity + quantity;
-        const newAveragePrice = (oldTotalCost + newTotalCost) / newQuantity;
-        const newTotalCostValue = new Decimal(oldTotalCost + newTotalCost);
-
-        await tx.portfolioHolding.update({
+        const existingHolding = await tx.portfolioHolding.findUnique({
           where: {
             userId_symbol: {
               userId,
               symbol: normalizedSymbol,
             },
           },
-          data: {
-            quantity: newQuantity,
-            averageBuyPrice: new Decimal(newAveragePrice),
-            totalCost: newTotalCostValue,
-            company: normalizedCompany,
-          },
         });
-      } else {
-        // Create new holding
-        await tx.portfolioHolding.create({
-          data: {
-            userId,
-            symbol: normalizedSymbol,
-            company: normalizedCompany,
-            quantity,
-            averageBuyPrice: new Decimal(price),
-            totalCost: totalAmount,
-          },
-        });
-      }
 
-      return transaction;
-    });
+        if (existingHolding) {
+          const newQuantity = existingHolding.quantity + quantity;
+          const newTotalCostValue = existingHolding.totalCost.add(totalAmount);
+          const newAveragePrice = newTotalCostValue.div(newQuantity);
+
+          await tx.portfolioHolding.update({
+            where: {
+              userId_symbol: {
+                userId,
+                symbol: normalizedSymbol,
+              },
+            },
+            data: {
+              quantity: newQuantity,
+              averageBuyPrice: newAveragePrice,
+              totalCost: newTotalCostValue,
+              company: normalizedCompany,
+            },
+          });
+        } else {
+          await tx.portfolioHolding.create({
+            data: {
+              userId,
+              symbol: normalizedSymbol,
+              company: normalizedCompany,
+              quantity,
+              averageBuyPrice: unitPrice,
+              totalCost: totalAmount,
+            },
+          });
+        }
+
+        await recordSnapshotTx(tx, userId, updatedUser.cashBalance);
+
+        return transaction;
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+    );
 
     return { success: true, data: result };
   } catch (err) {
-    console.error('buyStock error:', err);
-    return { success: false, error: 'Failed to buy stock' };
+    logError('transaction.buyStock', err, { userId, symbol });
+    const errorMessage = err instanceof Error ? err.message : 'Failed to buy stock';
+    return { success: false, error: errorMessage };
   }
 }
 
-export async function sellStock({ userId, symbol, company, quantity, price }: SellStockParams) {
+export async function sellStockForUser(userId: string, { symbol, company, quantity }: SellStockParams) {
   try {
-    if (quantity <= 0 || price <= 0) {
-      return { success: false, error: 'Quantity and price must be greater than 0' };
+    if (!Number.isSafeInteger(quantity) || quantity <= 0 || quantity > MAX_ORDER_QUANTITY) {
+      return { success: false, error: 'Quantity is invalid' };
     }
 
     const normalizedSymbol = symbol.toUpperCase().trim();
     const normalizedCompany = company.trim();
-    const totalAmount = new Decimal(quantity * price);
+    if (!normalizedSymbol || !normalizedCompany) {
+      return { success: false, error: 'Order details are invalid' };
+    }
 
-    // Use a transaction to ensure data consistency
-    const result = await prisma.$transaction(async (tx) => {
-      // Check if user has enough shares
-      const existingHolding = await tx.portfolioHolding.findUnique({
-        where: {
-          userId_symbol: {
+    const unitPrice = await resolveAuthoritativePrice(normalizedSymbol);
+    const totalAmount = unitPrice.mul(quantity);
+
+    const result = await withSerializableRetry(() =>
+      prisma.$transaction(async (tx) => {
+        const existingHolding = await tx.portfolioHolding.findUnique({
+          where: {
+            userId_symbol: {
+              userId,
+              symbol: normalizedSymbol,
+            },
+          },
+        });
+
+        if (!existingHolding) {
+          throw new Error('You do not own any shares of this stock');
+        }
+
+        if (existingHolding.quantity < quantity) {
+          throw new Error(`Insufficient shares. You only have ${existingHolding.quantity} shares`);
+        }
+
+        const transaction = await tx.transaction.create({
+          data: {
             userId,
             symbol: normalizedSymbol,
+            company: normalizedCompany,
+            type: 'SELL',
+            quantity,
+            price: unitPrice,
+            totalAmount,
           },
-        },
-      });
+        });
 
-      if (!existingHolding) {
-        throw new Error('You do not own any shares of this stock');
-      }
+        const newQuantity = existingHolding.quantity - quantity;
 
-      if (existingHolding.quantity < quantity) {
-        throw new Error(`Insufficient shares. You only have ${existingHolding.quantity} shares`);
-      }
-
-      // Create the transaction record
-      const transaction = await tx.transaction.create({
-        data: {
-          userId,
-          symbol: normalizedSymbol,
-          company: normalizedCompany,
-          type: 'SELL',
-          quantity,
-          price: new Decimal(price),
-          totalAmount,
-        },
-      });
-
-      const newQuantity = existingHolding.quantity - quantity;
-
-      // Add cash back to user's balance
-      const sellAmount = totalAmount.toNumber();
-      const user = await tx.user.findUnique({
-        where: { id: userId },
-        select: { cashBalance: true },
-      });
-
-      if (user) {
-        await tx.user.update({
+        const user = await tx.user.findUnique({
           where: { id: userId },
-          data: {
-            cashBalance: new Decimal(user.cashBalance.toNumber() + sellAmount),
-          },
+          select: { cashBalance: true },
         });
-      }
 
-      if (newQuantity === 0) {
-        // Remove holding if quantity becomes zero
-        await tx.portfolioHolding.delete({
-          where: {
-            userId_symbol: {
-              userId,
-              symbol: normalizedSymbol,
+        if (!user) {
+          throw new Error('User not found');
+        }
+
+        const updatedUser = await tx.user.update({
+          where: { id: userId },
+          data: { cashBalance: { increment: totalAmount } },
+        });
+
+        if (newQuantity === 0) {
+          await tx.portfolioHolding.delete({
+            where: {
+              userId_symbol: {
+                userId,
+                symbol: normalizedSymbol,
+              },
             },
-          },
-        });
-      } else {
-        // Update holding quantity and total cost
-        // Average buy price stays the same (FIFO or average cost basis)
-        const newTotalCost = existingHolding.averageBuyPrice.mul(newQuantity);
+          });
+        } else {
+          // Average buy price stays the same (FIFO or average cost basis)
+          const newTotalCost = existingHolding.averageBuyPrice.mul(newQuantity);
 
-        await tx.portfolioHolding.update({
-          where: {
-            userId_symbol: {
-              userId,
-              symbol: normalizedSymbol,
+          await tx.portfolioHolding.update({
+            where: {
+              userId_symbol: {
+                userId,
+                symbol: normalizedSymbol,
+              },
             },
-          },
-          data: {
-            quantity: newQuantity,
-            totalCost: newTotalCost,
-          },
-        });
-      }
+            data: {
+              quantity: newQuantity,
+              totalCost: newTotalCost,
+            },
+          });
+        }
 
-      return transaction;
-    });
+        await recordSnapshotTx(tx, userId, updatedUser.cashBalance);
+
+        return transaction;
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+    );
 
     return { success: true, data: result };
   } catch (err) {
-    console.error('sellStock error:', err);
+    logError('transaction.sellStock', err, { userId, symbol });
     const errorMessage = err instanceof Error ? err.message : 'Failed to sell stock';
     return { success: false, error: errorMessage };
   }
 }
 
-export async function getTransactionsByUserId(userId: string, limit?: number) {
+export async function buyStock(params: BuyStockParams) {
+  const userId = await requireUserId();
+  return buyStockForUser(userId, params);
+}
+
+export async function sellStock(params: SellStockParams) {
+  const userId = await requireUserId();
+  return sellStockForUser(userId, params);
+}
+
+export async function getTransactions(limit?: number) {
   try {
+    const userId = await requireUserId();
     const transactions = await prisma.transaction.findMany({
       where: { userId },
       orderBy: { executedAt: 'desc' },
@@ -241,13 +277,14 @@ export async function getTransactionsByUserId(userId: string, limit?: number) {
       totalAmount: t.totalAmount.toNumber(),
     }));
   } catch (err) {
-    console.error('getTransactionsByUserId error:', err);
+    logError('transaction.getTransactions', err);
     return [];
   }
 }
 
-export async function getTransactionById(transactionId: string, userId: string) {
+export async function getTransactionById(transactionId: string) {
   try {
+    const userId = await requireUserId();
     const transaction = await prisma.transaction.findFirst({
       where: {
         id: transactionId,
@@ -257,8 +294,7 @@ export async function getTransactionById(transactionId: string, userId: string) 
 
     return transaction;
   } catch (err) {
-    console.error('getTransactionById error:', err);
+    logError('transaction.getTransactionById', err, { transactionId });
     return null;
   }
 }
-

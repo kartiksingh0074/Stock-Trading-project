@@ -1,30 +1,12 @@
 import { auth } from "@/lib/better-auth/auth";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { getWatchlistByUserId } from "@/lib/actions/watchlist.actions";
-import { getStockQuote } from "@/lib/actions/finnhub.actions";
+import { getWatchlist } from "@/lib/actions/watchlist.actions";
+import { getStockProfile, getStockQuote } from "@/lib/actions/finnhub.actions";
+import { getUserAlerts } from "@/lib/actions/alert.actions";
 import WatchlistTable from "@/components/WatchlistTable";
+import AlertsPanel from "@/components/AlertsPanel";
 import { formatMarketCapValue } from "@/lib/utils";
-
-const FINNHUB_BASE_URL = 'https://finnhub.io/api/v1';
-const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY ?? process.env.NEXT_PUBLIC_FINNHUB_API_KEY ?? '';
-
-async function fetchStockProfile(symbol: string) {
-  try {
-    if (!FINNHUB_API_KEY) return null;
-    
-    const url = `${FINNHUB_BASE_URL}/stock/profile2?symbol=${encodeURIComponent(symbol.toUpperCase())}&token=${FINNHUB_API_KEY}`;
-    const response = await fetch(url, { next: { revalidate: 3600 } });
-    
-    if (!response.ok) return null;
-    
-    const profile = await response.json();
-    return profile;
-  } catch (error) {
-    console.error(`Error fetching profile for ${symbol}:`, error);
-    return null;
-  }
-}
 
 export default async function WatchlistPage() {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -36,7 +18,8 @@ export default async function WatchlistPage() {
   const userId = session.user.id;
 
   // Fetch watchlist items
-  const watchlistItems = await getWatchlistByUserId(userId);
+  const watchlistItems = await getWatchlist();
+  const alerts = await getUserAlerts();
 
   // Fetch current prices and additional data for each watchlist item
   const watchlistWithData = await Promise.all(
@@ -46,11 +29,11 @@ export default async function WatchlistPage() {
         const quote = await getStockQuote(item.symbol);
         
         // Fetch full profile for market cap and P/E ratio
-        const profile = await fetchStockProfile(item.symbol);
+        const profile = await getStockProfile(item.symbol);
         
         // Get logo URL from Finnhub profile or use default
         const logoUrl = profile?.logo 
-          ? profile.logo 
+          ? profile.logo
           : `https://finnhub.io/api/logo?symbol=${encodeURIComponent(item.symbol.toUpperCase())}`;
 
         return {
@@ -92,7 +75,12 @@ export default async function WatchlistPage() {
         </div>
       </div>
 
-      <WatchlistTable watchlist={watchlistWithData} userId={userId} />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2">
+          <WatchlistTable watchlist={watchlistWithData} userId={userId} />
+        </div>
+        <AlertsPanel alertData={alerts} />
+      </div>
     </div>
   );
 }

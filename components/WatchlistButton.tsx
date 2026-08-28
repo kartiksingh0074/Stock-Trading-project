@@ -24,7 +24,7 @@ const WatchlistButton = ({
   const checkWatchlistStatus = async () => {
     if (!userId) return;
     try {
-      const inWatchlist = await isInWatchlist(userId, symbol);
+      const inWatchlist = await isInWatchlist(symbol);
       setAdded(inWatchlist);
     } catch (error) {
       console.error("Error checking watchlist status:", error);
@@ -47,7 +47,7 @@ const WatchlistButton = ({
       const next = !added;
       
       if (next) {
-        const result = await addToWatchlist(userId, symbol, company);
+        const result = await addToWatchlist(symbol, company);
         if (result.success) {
           setAdded(true);
           onWatchlistChange?.(symbol, true);
@@ -56,7 +56,7 @@ const WatchlistButton = ({
           toast.error(result.error || "Failed to add to watchlist");
         }
       } else {
-        const result = await removeFromWatchlist(userId, symbol);
+        const result = await removeFromWatchlist(symbol);
         if (result.success) {
           setAdded(false);
           onWatchlistChange?.(symbol, false);

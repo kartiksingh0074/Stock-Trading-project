@@ -1,6 +1,8 @@
 'use server';
 
 import { prisma } from '@/lib/prisma';
+import { requireUserId } from '@/lib/auth/session';
+import { logError } from '@/lib/utils/logError';
 
 export interface PortfolioSummary {
   totalHoldings: number;
@@ -21,8 +23,9 @@ export interface PortfolioSummary {
   }>;
 }
 
-export async function getPortfolioHoldings(userId: string) {
+export async function getPortfolioHoldings() {
   try {
+    const userId = await requireUserId();
     const holdings = await prisma.portfolioHolding.findMany({
       where: { userId },
       orderBy: { symbol: 'asc' },
@@ -34,13 +37,14 @@ export async function getPortfolioHoldings(userId: string) {
       totalCost: holding.totalCost.toNumber(),
     }));
   } catch (err) {
-    console.error('getPortfolioHoldings error:', err);
+    logError('portfolio.getPortfolioHoldings', err);
     return [];
   }
 }
 
-export async function getPortfolioHolding(userId: string, symbol: string) {
+export async function getPortfolioHolding(symbol: string) {
   try {
+    const userId = await requireUserId();
     const normalizedSymbol = symbol.toUpperCase().trim();
 
     const holding = await prisma.portfolioHolding.findUnique({
@@ -60,16 +64,16 @@ export async function getPortfolioHolding(userId: string, symbol: string) {
       totalCost: holding.totalCost.toNumber(),
     };
   } catch (err) {
-    console.error('getPortfolioHolding error:', err);
+    logError('portfolio.getPortfolioHolding', err, { symbol });
     return null;
   }
 }
 
 export async function getPortfolioSummary(
-  userId: string,
   currentPrices?: Record<string, number>
 ): Promise<PortfolioSummary> {
   try {
+    const userId = await requireUserId();
     const holdings = await prisma.portfolioHolding.findMany({
       where: { userId },
       orderBy: { symbol: 'asc' },
@@ -120,7 +124,7 @@ export async function getPortfolioSummary(
       holdings: holdingsWithPrices,
     };
   } catch (err) {
-    console.error('getPortfolioSummary error:', err);
+    logError('portfolio.getPortfolioSummary', err);
     return {
       totalHoldings: 0,
       totalCost: 0,
@@ -132,9 +136,9 @@ export async function getPortfolioSummary(
   }
 }
 
-export async function getPortfolioValue(userId: string, currentPrices?: Record<string, number>) {
+export async function getPortfolioValue(currentPrices?: Record<string, number>) {
   try {
-    const summary = await getPortfolioSummary(userId, currentPrices);
+    const summary = await getPortfolioSummary(currentPrices);
     return {
       totalCost: summary.totalCost,
       totalValue: summary.totalValue,
@@ -142,7 +146,7 @@ export async function getPortfolioValue(userId: string, currentPrices?: Record<s
       totalGainLossPercent: summary.totalGainLossPercent,
     };
   } catch (err) {
-    console.error('getPortfolioValue error:', err);
+    logError('portfolio.getPortfolioValue', err);
     return {
       totalCost: 0,
       totalValue: 0,

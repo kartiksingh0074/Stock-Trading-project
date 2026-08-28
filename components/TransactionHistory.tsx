@@ -19,21 +19,27 @@ function toNumber(value: number | { toNumber: () => number }): number {
 
 interface TransactionHistoryProps {
   transactions: Transaction[];
+  title?: string;
+  emptyMessage?: string;
 }
 
-export default function TransactionHistory({ transactions }: TransactionHistoryProps) {
+export default function TransactionHistory({
+  transactions,
+  title = "Recent Transactions",
+  emptyMessage = "No transactions yet.",
+}: TransactionHistoryProps) {
   if (transactions.length === 0) {
     return (
       <div className="bg-gray-800 rounded-lg p-6">
-        <h2 className="text-xl font-bold mb-4">Transaction History</h2>
-        <p className="text-gray-400">No transactions yet.</p>
+        <h2 className="text-xl font-bold mb-4">{title}</h2>
+        <p className="text-gray-400">{emptyMessage}</p>
       </div>
     );
   }
 
   return (
     <div className="bg-gray-800 rounded-lg p-6">
-      <h2 className="text-xl font-bold mb-4">Recent Transactions</h2>
+      <h2 className="text-xl font-bold mb-4">{title}</h2>
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
@@ -79,4 +85,3 @@ export default function TransactionHistory({ transactions }: TransactionHistoryP
     </div>
   );
 }
-

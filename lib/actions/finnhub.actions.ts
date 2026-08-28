@@ -3,11 +3,60 @@
 import { getDateRange, validateArticle, formatArticle } from '@/lib/utils';
 import { POPULAR_STOCK_SYMBOLS } from '@/lib/constants';
 import { cache } from 'react';
+import { getRedis, getFinnhubLimiter } from '@/lib/redis/client';
+import { logError } from '@/lib/utils/logError';
 
 const FINNHUB_BASE_URL = 'https://finnhub.io/api/v1';
-const NEXT_PUBLIC_FINNHUB_API_KEY = process.env.NEXT_PUBLIC_FINNHUB_API_KEY ?? '';
+
+function getFinnhubApiKey() {
+  const token = process.env.FINNHUB_API_KEY;
+  if (!token) throw new Error('FINNHUB API key is not configured');
+  return token;
+}
+
+// Stale copies are kept much longer than the "fresh" TTL so a rate-limited request
+// can still serve something useful instead of failing outright.
+const STALE_MULTIPLIER = 10;
+const STALE_MIN_TTL_SECONDS = 3600;
 
 async function fetchJSON<T>(url: string, revalidateSeconds?: number): Promise<T> {
+  const redis = getRedis();
+  const cacheKey = revalidateSeconds ? `finnhub:v1:${url}` : null;
+  const staleKey = cacheKey ? `finnhub:v1:stale:${url}` : null;
+
+  if (cacheKey && redis) {
+    try {
+      const cached = await redis.get<T>(cacheKey);
+      if (cached !== null && cached !== undefined) return cached;
+    } catch (err) {
+      logError('finnhub.cache.read', err, { url });
+    }
+  }
+
+  const limiter = getFinnhubLimiter();
+  if (limiter) {
+    let limited = false;
+    try {
+      limited = !(await limiter.limit('finnhub')).success;
+    } catch (err) {
+      // Redis/limiter unreachable (e.g. misconfigured) — fail open rather than
+      // blocking every Finnhub call because the limiter itself is down.
+      logError('finnhub.ratelimit', err, { url });
+    }
+
+    if (limited) {
+      if (staleKey && redis) {
+        try {
+          const stale = await redis.get<T>(staleKey);
+          if (stale !== null && stale !== undefined) return stale;
+        } catch (err) {
+          logError('finnhub.cache.stale-read', err, { url });
+        }
+      }
+      throw new Error('RATE_LIMITED: Finnhub request rate limit reached, please try again shortly');
+    }
+  }
+
   const options: RequestInit & { next?: { revalidate?: number } } = revalidateSeconds
     ? { cache: 'force-cache', next: { revalidate: revalidateSeconds } }
     : { cache: 'no-store' };
@@ -17,7 +66,20 @@ async function fetchJSON<T>(url: string, revalidateSeconds?: number): Promise<T>
     const text = await res.text().catch(() => '');
     throw new Error(`Fetch failed ${res.status}: ${text}`);
   }
-  return (await res.json()) as T;
+  const data = (await res.json()) as T;
+
+  if (redis && cacheKey && staleKey && revalidateSeconds) {
+    try {
+      await Promise.all([
+        redis.set(cacheKey, data, { ex: revalidateSeconds }),
+        redis.set(staleKey, data, { ex: Math.max(revalidateSeconds * STALE_MULTIPLIER, STALE_MIN_TTL_SECONDS) }),
+      ]);
+    } catch (err) {
+      logError('finnhub.cache.write', err, { url });
+    }
+  }
+
+  return data;
 }
 
 export { fetchJSON };
@@ -25,10 +87,7 @@ export { fetchJSON };
 export async function getNews(symbols?: string[]): Promise<MarketNewsArticle[]> {
   try {
     const range = getDateRange(5);
-    const token = process.env.FINNHUB_API_KEY ?? NEXT_PUBLIC_FINNHUB_API_KEY;
-    if (!token) {
-      throw new Error('FINNHUB API key is not configured');
-    }
+    const token = getFinnhubApiKey();
     const cleanSymbols = (symbols || [])
       .map((s) => s?.trim().toUpperCase())
       .filter((s): s is string => Boolean(s));
@@ -46,7 +105,7 @@ export async function getNews(symbols?: string[]): Promise<MarketNewsArticle[]> 
             const articles = await fetchJSON<RawNewsArticle[]>(url, 300);
             perSymbolArticles[sym] = (articles || []).filter(validateArticle);
           } catch (e) {
-            console.error('Error fetching company news for', sym, e);
+            logError('finnhub.getNews.companyNews', e, { symbol: sym });
             perSymbolArticles[sym] = [];
           }
         })
@@ -93,23 +152,21 @@ export async function getNews(symbols?: string[]): Promise<MarketNewsArticle[]> 
     const formatted = unique.slice(0, maxArticles).map((a, idx) => formatArticle(a, false, undefined, idx));
     return formatted;
   } catch (err) {
-    console.error('getNews error:', err);
+    logError('finnhub.getNews', err);
     throw new Error('Failed to fetch news');
   }
 }
 
 export const searchStocks = cache(async (query?: string): Promise<StockWithWatchlistStatus[]> => {
   try {
-    const token = process.env.FINNHUB_API_KEY ?? NEXT_PUBLIC_FINNHUB_API_KEY;
-    if (!token) {
-      // If no token, log and return empty to avoid throwing per requirements
-      console.error('Error in stock search:', new Error('FINNHUB API key is not configured'));
-      return [];
-    }
+    const token = getFinnhubApiKey();
 
     const trimmed = typeof query === 'string' ? query.trim() : '';
 
     let results: FinnhubSearchResult[] = [];
+
+    // Extra field carried alongside search results only for the "popular symbols" branch below.
+    const exchangeBySymbol = new Map<string, string | undefined>();
 
     if (!trimmed) {
       // Fetch top 10 popular symbols' profiles
@@ -119,11 +176,11 @@ export const searchStocks = cache(async (query?: string): Promise<StockWithWatch
           try {
             const url = `${FINNHUB_BASE_URL}/stock/profile2?symbol=${encodeURIComponent(sym)}&token=${token}`;
             // Revalidate every hour
-            const profile = await fetchJSON<any>(url, 3600);
-            return { sym, profile } as { sym: string; profile: any };
+            const profile = await fetchJSON<FinnhubProfile2>(url, 3600);
+            return { sym, profile };
           } catch (e) {
-            console.error('Error fetching profile2 for', sym, e);
-            return { sym, profile: null } as { sym: string; profile: any };
+            logError('finnhub.searchStocks.profile', e, { symbol: sym });
+            return { sym, profile: null as FinnhubProfile2 | null };
           }
         })
       );
@@ -132,18 +189,14 @@ export const searchStocks = cache(async (query?: string): Promise<StockWithWatch
         .map(({ sym, profile }) => {
           const symbol = sym.toUpperCase();
           const name: string | undefined = profile?.name || profile?.ticker || undefined;
-          const exchange: string | undefined = profile?.exchange || undefined;
           if (!name) return undefined;
+          exchangeBySymbol.set(symbol, profile?.exchange);
           const r: FinnhubSearchResult = {
             symbol,
             description: name,
             displaySymbol: symbol,
             type: 'Common Stock',
           };
-          // We don't include exchange in FinnhubSearchResult type, so carry via mapping later using profile
-          // To keep pipeline simple, attach exchange via closure map stage
-          // We'll reconstruct exchange when mapping to final type
-          (r as any).__exchange = exchange; // internal only
           return r;
         })
         .filter((x): x is FinnhubSearchResult => Boolean(x));
@@ -158,7 +211,7 @@ export const searchStocks = cache(async (query?: string): Promise<StockWithWatch
         const upper = (r.symbol || '').toUpperCase();
         const name = r.description || upper;
         const exchangeFromDisplay = (r.displaySymbol as string | undefined) || undefined;
-        const exchangeFromProfile = (r as any).__exchange as string | undefined;
+        const exchangeFromProfile = exchangeBySymbol.get(upper);
         const exchange = exchangeFromDisplay || exchangeFromProfile || 'US';
         const type = r.type || 'Stock';
         const item: StockWithWatchlistStatus = {
@@ -174,18 +227,14 @@ export const searchStocks = cache(async (query?: string): Promise<StockWithWatch
 
     return mapped;
   } catch (err) {
-    console.error('Error in stock search:', err);
+    logError('finnhub.searchStocks', err);
     return [];
   }
 });
 
 export async function getStockQuote(symbol: string): Promise<{ price: number; changePercent: number } | null> {
   try {
-    const token = process.env.FINNHUB_API_KEY ?? NEXT_PUBLIC_FINNHUB_API_KEY;
-    if (!token) {
-      console.error('FINNHUB API key is not configured');
-      return null;
-    }
+    const token = getFinnhubApiKey();
 
     const normalizedSymbol = symbol.toUpperCase().trim();
     const url = `${FINNHUB_BASE_URL}/quote?symbol=${encodeURIComponent(normalizedSymbol)}&token=${token}`;
@@ -200,33 +249,44 @@ export async function getStockQuote(symbol: string): Promise<{ price: number; ch
 
     return null;
   } catch (err) {
-    console.error('Error fetching stock quote:', err);
+    logError('finnhub.getStockQuote', err, { symbol });
     return null;
   }
 }
 
-export async function getStockProfile(symbol: string): Promise<{ name: string; exchange: string } | null> {
+export async function getStockProfile(symbol: string): Promise<{
+  name: string;
+  exchange: string;
+  logo?: string;
+  marketCapitalization?: number;
+  pe?: number;
+} | null> {
   try {
-    const token = process.env.FINNHUB_API_KEY ?? NEXT_PUBLIC_FINNHUB_API_KEY;
-    if (!token) {
-      console.error('FINNHUB API key is not configured');
-      return null;
-    }
+    const token = getFinnhubApiKey();
 
     const normalizedSymbol = symbol.toUpperCase().trim();
     const url = `${FINNHUB_BASE_URL}/stock/profile2?symbol=${encodeURIComponent(normalizedSymbol)}&token=${token}`;
-    const profile = await fetchJSON<{ name?: string; exchange?: string }>(url, 3600); // Cache for 1 hour
+    const profile = await fetchJSON<{
+      name?: string;
+      exchange?: string;
+      logo?: string;
+      marketCapitalization?: number;
+      pe?: number;
+    }>(url, 3600); // Cache for 1 hour
 
     if (profile?.name) {
       return {
         name: profile.name,
         exchange: profile.exchange || 'US',
+        logo: profile.logo,
+        marketCapitalization: profile.marketCapitalization,
+        pe: profile.pe,
       };
     }
 
     return null;
   } catch (err) {
-    console.error('Error fetching stock profile:', err);
+    logError('finnhub.getStockProfile', err, { symbol });
     return null;
   }
 }

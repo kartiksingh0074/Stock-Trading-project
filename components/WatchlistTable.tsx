@@ -3,8 +3,9 @@
 import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { TrendingUp, TrendingDown } from "lucide-react";
+import { TrendingUp, TrendingDown, Bell } from "lucide-react";
 import WatchlistButton from "./WatchlistButton";
+import AlertModal from "./AlertModal";
 import { formatPrice, formatChangePercent, getChangeColorClass } from "@/lib/utils";
 
 interface WatchlistItem {
@@ -68,6 +69,7 @@ export default function WatchlistTable({ watchlist, userId }: WatchlistTableProp
             <th className="text-right py-2 px-3 text-xs font-semibold">Change</th>
             <th className="text-right py-2 px-3 text-xs font-semibold">Market Cap</th>
             <th className="text-right py-2 px-3 text-xs font-semibold">P/E</th>
+            <th className="text-center py-2 px-3 text-xs font-semibold">Alert</th>
             <th className="text-center py-2 px-3 text-xs font-semibold">Action</th>
           </tr>
         </thead>
@@ -83,6 +85,7 @@ export default function WatchlistTable({ watchlist, userId }: WatchlistTableProp
 
 function WatchlistRow({ item, userId }: { item: WatchlistItem; userId: string }) {
   const [imageError, setImageError] = useState(false);
+  const [alertModalOpen, setAlertModalOpen] = useState(false);
   const isPositive = (item.changePercent ?? 0) >= 0;
   const changeColorClass = getChangeColorClass(item.changePercent);
   const logoUrl = item.logo || getStockLogoUrl(item.symbol);
@@ -145,6 +148,24 @@ function WatchlistRow({ item, userId }: { item: WatchlistItem; userId: string })
         <div className="text-xs text-gray-400">
           {item.peRatio || "N/A"}
         </div>
+      </td>
+      <td className="py-2 px-3 text-center">
+        <button className="add-alert" onClick={() => setAlertModalOpen(true)}>
+          <Bell className="star-icon" />
+          Add Alert
+        </button>
+        <AlertModal
+          open={alertModalOpen}
+          setOpen={setAlertModalOpen}
+          alertData={{
+            symbol: item.symbol,
+            company: item.company,
+            alertName: `${item.symbol} price alert`,
+            alertType: "upper",
+            threshold: item.currentPrice ? item.currentPrice.toFixed(2) : "",
+          }}
+          onSaved={() => window.location.reload()}
+        />
       </td>
       <td className="py-2 px-3 text-center">
         <WatchlistButton

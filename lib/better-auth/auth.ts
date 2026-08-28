@@ -5,6 +5,21 @@ import { nextCookies } from "better-auth/next-js";
 
 let authInstance: ReturnType<typeof betterAuth> | null = null;
 
+function getSecret(): string {
+    const secret = process.env.BETTER_AUTH_SECRET;
+    if (!secret) {
+        throw new Error(
+            "BETTER_AUTH_SECRET is not set. Refusing to start with an insecure default — set it in your environment (see .env.example)."
+        );
+    }
+    return secret;
+}
+
+function getTrustedOrigins(): string[] {
+    const raw = process.env.TRUSTED_ORIGINS || process.env.BETTER_AUTH_URL || "http://localhost:3000";
+    return raw.split(",").map((origin) => origin.trim()).filter(Boolean);
+}
+
 export const getAuth = () => {
     if(authInstance) return authInstance;
 
@@ -12,7 +27,7 @@ export const getAuth = () => {
         database: prismaAdapter(prisma, {
             provider: "mysql",
         }),
-        secret: process.env.BETTER_AUTH_SECRET || "fallback-secret-key-min-32-characters-long",
+        secret: getSecret(),
         baseURL: process.env.BETTER_AUTH_URL || "http://localhost:3000",
         emailAndPassword: {
             enabled: true,
@@ -23,7 +38,7 @@ export const getAuth = () => {
             autoSignIn: true,
         },
         plugins: [nextCookies()],
-        trustedOrigins: ["http://localhost:3000"],
+        trustedOrigins: getTrustedOrigins(),
     });
 
     return authInstance;
